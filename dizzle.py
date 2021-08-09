@@ -161,23 +161,89 @@ class Expander():
     "Variable expansion"
     def __init__(self, *dicts, **kwa):
         self._debug = kwa.get('debug', False)
-        self._globals = globals_
-        self._locals  = locals_
+        self._start = kwa.get('start', '{')
+        self._end = kwa.get('end', '}')
+        self.reset(*dicts)
 
     def __getitem__(self, k):
-        if k in self._globals:
-            return self._globals[k]
-        return self._locals[k]
+        for dict_ in self._locals_first:
+            if k in dict_:
+                return dict_[k]
+        raise KeyError(f"No such key {k} in any known scope")
 
     def __contains__(self, k):
-        if k in self._globals: return True
-        if k in self._locals: return True
+        for dict_ in self._locals_first:
+            if k in dict_:
+                return True
         return False
 
     # All the other expanding code goes here:
     def __call__(self, expr, **kwa):
-        raise NotImplementedError
+        return self.expand(expr, **kwa)
+        ## raise NotImplementedError
 
+    def expand(self, text, **kwa):
+        tokens = self.simple_tokenize(text, **kwa)
+        expanded_tokens = self.expanded_tokens(*tokens)
+        return expanded_tokens
+
+    def expand_tokens(self, *tokens, **kwa):
+        expanded_tokens = [ ]
+        default = kwa.get('default')
+        for token in tokens:
+            # Replace with if (self._start in token) and (self._end in token)
+            #   when we support re.sub for multi-expands per token;
+            if token.startswith(self._start) and token.endswith(self._end):
+                varname = token[1:-1]
+                v = self._find_var(varname)
+                if v != None:
+                    expanded_tokens.append(v)
+                else:
+                    if default:
+                        expanded_tokens.append(default)
+                        continue
+                    ## bad_where, bad_ln = self._mf.trim_line_no, self._mf[self._mf.trim_line_no]
+                    self._error = f"Unset variable {varname}"
+                    return False
+            else:
+                expanded_tokens.append(token)
+        return expanded_tokens
+
+    def get(self, k, dflt = None):
+        for dict_ in self._locals_first:
+            if k in dict_:
+                return dict_[k]
+        return dflt
+
+    def outermost(self, k):
+        for dict_ in self._globals_first:
+            if k in dict_:
+                return dict_[k]
+        raise KeyError(f"No such key {k} in outermost or other scopes")
+
+    def reset(self, *dicts):
+        "reset -- use for scope change (ie: new locals at end of list);"
+        self._globals_first = list(dicts)
+        self._locals_first = self._globals_first[:]
+        self._locals_first.reverse()
+
+    def simple_tokenize(self, txt, **kwa):
+        translation = kwa.get('translation', None)
+        pattern = kwa.get('pattern', r'\s+')
+        rex = re.compile(pattern)
+        tokens = rex.split(txt)
+        if translation:
+            expanded_tokens = [ ]
+            for token in tokens:
+                token.replace(translation[0], translation[1])
+                expanded_tokens.append(token)
+            tokens = expanded_tokens
+        return tokens
+
+    @property
+    def error(self):
+        return self._error
+    
 if __name__ == "__main__":
     "Test suite;"
 # >>> xp = Expander(global_dict, local_dict)
