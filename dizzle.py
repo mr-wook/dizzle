@@ -215,11 +215,17 @@ class Expander():
                 return dict_[k]
         return dflt
 
+    def innermost(self, k):
+        dict_ = self._locals_first:
+        if k in dict_:
+            return dict_[k]
+        raise KeyError(f"No such key {k} in innermost scope")
+
     def outermost(self, k):
-        for dict_ in self._globals_first:
-            if k in dict_:
-                return dict_[k]
-        raise KeyError(f"No such key {k} in outermost or other scopes")
+        dict_ = self._globals_first:
+        if k in dict_:
+            return dict_[k]
+        raise KeyError(f"No such key {k} in outermost scope")
 
     def reset(self, *dicts):
         "reset -- use for scope change (ie: new locals at end of list);"
