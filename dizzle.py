@@ -163,6 +163,7 @@ class Expander():
         self._debug = kwa.get('debug', False)
         self._start = kwa.get('start', '{')
         self._end = kwa.get('end', '}')
+        self.local_scope = self.innermost
         self.reset(*dicts)
 
     def __getitem__(self, k):
@@ -195,7 +196,7 @@ class Expander():
             #   when we support re.sub for multi-expands per token;
             if token.startswith(self._start) and token.endswith(self._end):
                 varname = token[1:-1]
-                v = self._find_var(varname)
+                v = self._get(varname, None)
                 if v != None:
                     expanded_tokens.append(v)
                 else:
@@ -216,7 +217,7 @@ class Expander():
         return dflt
 
     def innermost(self, k):
-        dict_ = self._locals_first:
+        dict_ = self._locals_first
         if k in dict_:
             return dict_[k]
         raise KeyError(f"No such key {k} in innermost scope")
