@@ -1,11 +1,11 @@
 #!/bin/env python3
 """dizzle -- tools to build DSLs with;"""
 if True:
-    import os
-    import pprint
+    ## import os
+    ## import pprint
     import re
-    import sys
-    import typing
+    ## import sys
+    ## import typing
 
 
 class DynaFile():
