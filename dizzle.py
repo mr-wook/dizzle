@@ -1,5 +1,7 @@
 #!/bin/env python3
-"""dizzle -- tools to build DSLs with;"""
+
+"""Tools to build DSLs (domain specific languages) with;"""
+
 if True:
     ## import os
     ## import pprint
@@ -84,11 +86,12 @@ class DynaFile():
             self._trimmed = self.trim(self._obuf)
         return self._line_no
 
-    def insert_trimmed(self, newdata, where = None):
+    def insert_trimmed(self, newdata, where = None, **kwa):
+        drop = kwa.get('exclude_source_lines', 1)
         if where == None:
             where = self.trim_line_no
         processed = self.trimmed[:where]
-        unprocessed = self.trimmed[where:]
+        unprocessed = self.trimmed[where + drop:]
         self._trimmed = processed + newdata + unprocessed
         self._trim_line_no = where - 1 # The yield will skip the first included line w/o this;
 
@@ -190,13 +193,13 @@ class Expander():
 
     def expand_tokens(self, *tokens, **kwa):
         expanded_tokens = [ ]
-        default = kwa.get('default')
+        default = kwa.get('default', None)
         for token in tokens:
             # Replace with if (self._start in token) and (self._end in token)
             #   when we support re.sub for multi-expands per token;
             if token.startswith(self._start) and token.endswith(self._end):
                 varname = token[1:-1]
-                v = self._get(varname, None)
+                v = self.get(varname, None)
                 if v != None:
                     expanded_tokens.append(v)
                 else:
@@ -216,14 +219,28 @@ class Expander():
                 return dict_[k]
         return dflt
 
+    def format(self, k):
+        v = self[k]
+        if ':' not in v:
+            return v
+        v_data, v_fmt = re.split(r'\s*:\s*', v, 1)
+        v_data, v_fmt = v_data.strip(), v_fmt.strip()
+        type_ = str
+        if v_data.isdigit():
+            type_ = int
+        elif re.match(r'\d+\.\d*', v_data):
+            type_ = float
+        v_data = type_(v_data)
+        return format(v_data, v_fmt)
+
     def innermost(self, k):
-        dict_ = self._locals_first
+        dict_ = self._locals_first[0]
         if k in dict_:
             return dict_[k]
         raise KeyError(f"No such key {k} in innermost scope")
 
     def outermost(self, k):
-        dict_ = self._globals_first
+        dict_ = self._globals_first[0]
         if k in dict_:
             return dict_[k]
         raise KeyError(f"No such key {k} in outermost scope")
@@ -233,8 +250,13 @@ class Expander():
         self._globals_first = list(dicts)
         self._locals_first = self._globals_first[:]
         self._locals_first.reverse()
+        return self._globals_first
 
     def simple_tokenize(self, txt, **kwa):
+        tokens = Expander.tokenize(txt, **kwa)
+
+    @staticmethod
+    def tokenize(txt, **kwa):
         translation = kwa.get('translation', None)
         pattern = kwa.get('pattern', r'\s+')
         rex = re.compile(pattern)
@@ -251,6 +273,14 @@ class Expander():
     def error(self):
         return self._error
     
+    @property
+    def globals(self):
+        return self._globals_first[0]
+
+    @property
+    def locals(self):
+        return self._locals_first[0]
+
 if __name__ == "__main__":
     "Test suite;"
     import sys
@@ -267,28 +297,56 @@ if __name__ == "__main__":
         directives = [ ]
         for ln in df.trim_iter():
             tokens = re.split(r'\s+', ln)
-            if tokens[0].lower == 'include':
+            if tokens[0].lower() == 'include':
                 sub_include_fn = tokens[1]
                 sub_df = DynaFile(sub_include_fn)
                 df.insert_trimmed(sub_df.trimmed)
             directives.append(ln)
         ostr = "\n".join(directives)
         print(ostr)
-        return True
+        return directives
 
-    def test_expander():
-        global_dict = dict(ga="A", gb="B", gc="C", a="GA", b="BG", V="4:04")
-        local_dict = dict(a="a", b="b", c="c")
-        xp = Expander(global_dict, local_dict)
-        print(f"a: {xp['a']}")
-        ## print(f"V: {xp['V']}")
+    def test_dereferencer():
+        globals_ = dict(ga="A", gb="B", gc="C", a="GA", b="BG", V="4:04")
+        middles_ = dict(a="middle a", b="mid b", c="mid-c")
+        locals_  = dict(a="a", b="b", c="c")
+        xp = Expander(globals_, middles_, locals_)
+        print(f"default a: {xp['a']}")
+        print(f"innermost (most local) a: {xp.innermost('a')}")
+        print(f"outermost (most global) a: {xp.outermost('a')}")
+        print(f"default V: {xp['V']}")
+        print(f"formatted V: {xp.format('V')}")
+
 
     def test_expand_file(src_fn):
         # >>> xp = Expander(global_dict, local_dict)
         #     s = xp("{foo}")
         #     s = xp("{foo}.{bar}")
         #     s = xp("{foo}.{frame:04d}.{ext}")
-        raise NotImplementedError
+        globals_, locals_ = dict(), dict()
+        xp = Expander(globals_, locals_)
+        directives = test_dynafile_include(src_fn)
+        # Now we have every legit directive, and can ignore (already processed) includes;
+        for ln in directives:
+            tokens = Expander.tokenize(ln)
+            cmd = tokens.pop(0).lower()
+            if cmd == 'include':
+                continue
+            if cmd == 'global':
+                k, v = tokens
+                xp.globals[k] = v
+                continue
+            if cmd == 'local':
+                k, v = tokens
+                xp.locals[k] = v
+                continue
+            if cmd == 'echo':
+                olist = xp.expand_tokens(*tokens)
+                print(" ".join(olist))
+                continue
+            print(f"Unknown command {cmd} in {ln}")
+            continue
+        return True
 
     def test_all(global_fn):
         # Test File Syntax:
@@ -298,8 +356,12 @@ if __name__ == "__main__":
         # echo <stuff> -- echo stuff with expansions using default notation;
         args = cli_get_args()
         include_fn = args.pop(0)
-        print(f"test_dynafile_include({fn})")
-        test_dynafile_include(include_fn)
-        print("test_expander()")
-        test_expander()
-        print(f"test_expand_file({fn})")
+        print(f"test_dynafile_include({include_fn})")
+        directives = test_dynafile_include(include_fn)
+        print("test_dereferencer()")
+        test_dereferencer()
+        print(f"test_expand_file({include_fn})")
+        test_expand_file(include_fn)
+
+    # Main
+    test_all(None)
