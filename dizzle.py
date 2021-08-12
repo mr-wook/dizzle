@@ -223,7 +223,7 @@ class Expander():
         raise KeyError(f"No such key {k} in innermost scope")
 
     def outermost(self, k):
-        dict_ = self._globals_first:
+        dict_ = self._globals_first
         if k in dict_:
             return dict_[k]
         raise KeyError(f"No such key {k} in outermost scope")
@@ -253,7 +253,53 @@ class Expander():
     
 if __name__ == "__main__":
     "Test suite;"
-# >>> xp = Expander(global_dict, local_dict)
-#     s = xp("{foo}")
-#     s = xp("{foo}.{bar}")
-#     s = xp("{foo}.{frame:04d}.{ext}")
+    import sys
+
+    def cli_get_args():
+        args = sys.argv[:]
+        pname = args.pop(0)
+        return args
+
+    def test_dynafile_include(include_fn):
+        args = cli_get_args()
+        include_fn = args.pop(0)
+        df = DynaFile(include_fn)
+        directives = [ ]
+        for ln in df.trim_iter():
+            tokens = re.split(r'\s+', ln)
+            if tokens[0].lower == 'include':
+                sub_include_fn = tokens[1]
+                sub_df = DynaFile(sub_include_fn)
+                df.insert_trimmed(sub_df.trimmed)
+            directives.append(ln)
+        ostr = "\n".join(directives)
+        print(ostr)
+        return True
+
+    def test_expander():
+        global_dict = dict(ga="A", gb="B", gc="C", a="GA", b="BG", V="4:04")
+        local_dict = dict(a="a", b="b", c="c")
+        xp = Expander(global_dict, local_dict)
+        print(f"a: {xp['a']}")
+        ## print(f"V: {xp['V']}")
+
+    def test_expand_file(src_fn):
+        # >>> xp = Expander(global_dict, local_dict)
+        #     s = xp("{foo}")
+        #     s = xp("{foo}.{bar}")
+        #     s = xp("{foo}.{frame:04d}.{ext}")
+        raise NotImplementedError
+
+    def test_all(global_fn):
+        # Test File Syntax:
+        # global <varname> <stuff> -- add stuff to varname in global scope;
+        # local <varname> <stuff> -- add stuff to varname in local scope;
+        # include <filename> -- scan an included file at this point;
+        # echo <stuff> -- echo stuff with expansions using default notation;
+        args = cli_get_args()
+        include_fn = args.pop(0)
+        print(f"test_dynafile_include({fn})")
+        test_dynafile_include(include_fn)
+        print("test_expander()")
+        test_expander()
+        print(f"test_expand_file({fn})")
