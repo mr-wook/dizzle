@@ -260,13 +260,14 @@ class Expander():
         pattern = kwa.get('pattern', r'\s+')
         rex = re.compile(pattern)
         tokens = rex.split(txt)
+        expanded_tokens = [ ]
         if translation:
-            expanded_tokens = [ ]
             for token in tokens:
                 token.replace(translation[0], translation[1])
                 expanded_tokens.append(token)
-            tokens = expanded_tokens
-        return tokens
+        else:
+            expanded_tokens = tokens[:]
+        return expanded_tokens
 
     @property
     def error(self):
