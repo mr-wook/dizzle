@@ -253,6 +253,7 @@ class Expander():
 
     def simple_tokenize(self, txt, **kwa):
         tokens = Expander.tokenize(txt, **kwa)
+        return tokens
 
     @staticmethod
     def tokenize(txt, **kwa):
@@ -260,14 +261,14 @@ class Expander():
         pattern = kwa.get('pattern', r'\s+')
         rex = re.compile(pattern)
         tokens = rex.split(txt)
-        expanded_tokens = [ ]
         if translation:
+            translated_tokens = [ ]
             for token in tokens:
                 token.replace(translation[0], translation[1])
-                expanded_tokens.append(token)
+                translated_tokens.append(token)
         else:
-            expanded_tokens = tokens[:]
-        return expanded_tokens
+            return tokens
+        return translated_tokens
 
     @property
     def error(self):
