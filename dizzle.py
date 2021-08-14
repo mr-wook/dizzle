@@ -3,11 +3,7 @@
 """Tools to build DSLs (domain specific languages) with;"""
 
 if True:
-    ## import os
-    ## import pprint
     import re
-    ## import sys
-    ## import typing
 
 
 class DynaFile():
@@ -180,6 +176,9 @@ class Expander():
             if k in dict_:
                 return True
         return False
+
+    def __setitem__(self, k, v):
+        self.locals[k] = v
 
     # All the other expanding code goes here:
     def __call__(self, expr, **kwa):
