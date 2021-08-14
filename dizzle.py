@@ -187,7 +187,7 @@ class Expander():
 
     def expand(self, text, **kwa):
         tokens = self.simple_tokenize(text, **kwa)
-        expanded_tokens = self.expanded_tokens(*tokens)
+        expanded_tokens = self.expand_tokens(*tokens)
         return expanded_tokens
 
     def expand_tokens(self, *tokens, **kwa):
