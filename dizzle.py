@@ -208,7 +208,7 @@ class Expander():
                         if type(v) in [ type([]), type({}) ]:
                             v = len(v)
                         elif type(v) in [ type("") ]:
-                            v = len(Expander.tokenize(v))
+                            v = str(len(Expander.tokenize(v)))
                         else:
                             self._error = f"Can't process value of type {type(v)}"
                             return False
