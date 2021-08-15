@@ -206,7 +206,7 @@ class Expander():
                 if v != None:
                     if show_length:
                         if type(v) in [ type([]), type({}) ]:
-                            v = len(v)
+                            v = str(len(v))
                         elif type(v) in [ type("") ]:
                             v = str(len(Expander.tokenize(v)))
                         else:
