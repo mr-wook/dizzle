@@ -205,7 +205,13 @@ class Expander():
                 v = self.get(varname, None)
                 if v != None:
                     if show_length:
-                        v = len(Expander.tokenize(v))
+                        if type(v) in [ type([]), type({}) ]:
+                            v = len(v)
+                        elif type(v) in [ type("") ]:
+                            v = len(Expander.tokenize(v))
+                        else:
+                            self._error = f"Can't process value of type {type(v)}"
+                            return False
                     expanded_tokens.append(v)
                 else:
                     if default:
