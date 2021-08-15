@@ -198,8 +198,14 @@ class Expander():
             #   when we support re.sub for multi-expands per token;
             if token.startswith(self._start) and token.endswith(self._end):
                 varname = token[1:-1]
+                # Get number of tokens in value if prefixed by "~"
+                show_length = True if varname.startswith("~") else False
+                if show_length:
+                    varname = varname[1:]
                 v = self.get(varname, None)
                 if v != None:
+                    if show_length:
+                        v = len(Expander.tokenize(v))
                     expanded_tokens.append(v)
                 else:
                     if default:
