@@ -5,6 +5,7 @@
 if True:
     import os
     import re
+    import shlex
 
 
 class DynaFile():
@@ -176,8 +177,6 @@ class DynaFile():
 
 class Expander():
     "Variable expansion, tokenizers, etc.;"
-    TOKEN_PATTERN = r"(\".*?\"|[\w\.\:=]+)"
-    TOKEN_REX = re.compile(TOKEN_PATTERN)
     def __init__(self, *dicts, **kwa):
         self._debug = kwa.get('debug', False)
         self._start = kwa.get('start', '{')
@@ -292,13 +291,13 @@ class Expander():
 
     @staticmethod
     def tokenize(txt, **kwa):
+        splitter = shlex.split
         translation = kwa.get('translation', None)
-        pattern = kwa.get('pattern', Expander.TOKEN_PATTERN)
-        if pattern == Expander.TOKEN_PATTERN:
-            rex = Expander.TOKEN_REX
-        else:
+        pattern = kwa.get('pattern', None)
+        if pattern:
             rex = re.compile(pattern)
-        tokens = rex.split(txt)
+            splitter = rex.split
+        tokens = splitter(txt)
         if translation:
             translated_tokens = [ ]
             for token in tokens:
