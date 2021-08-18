@@ -3,6 +3,7 @@
 """Tools to build DSLs (domain specific languages) with;"""
 
 if True:
+    import os
     import re
 
 
@@ -13,8 +14,12 @@ class DynaFile():
         self._fn = fn
         self._mode = mode
         self._comment = kwa.get('comment', '#')
+        default_search_dirs = [ '.', '~', '/etc/dlvdsl' ]
+        search_dirs = kwa.get('search_dirs', default_search_dirs)
+        self._search_dirs = [os.path.expanduser(dirnm) for dirnm in search_dirs]
         self.include = self.insert_raw
         self._trim_line_no = 0
+        # fd = self._open(fn, mode)
         ifd = open(fn, mode)
         if mode == 'r':
             self._ibuf = [ln.strip() for ln in ifd.readlines()]
@@ -91,6 +96,19 @@ class DynaFile():
         self._trimmed = processed + newdata + unprocessed
         self._trim_line_no = where - 1 # The yield will skip the first included line w/o this;
 
+    def _open(self, fn, mode):
+        if mode == 'r':
+            if not os.path.isfile(fn):
+                if '/' in fn:
+                    # Path specified, shouldn't search along search_dirs;
+                    return False
+                fn = self._search(fn)
+                if fn == False:
+                    return False
+            fd = open(fn, mode)
+            return fd
+        return True # Always true for other modes...until rb is implemented;
+
     def pop_trimmed(self, where = 0):
         self._trimmed.pop(where)
 
@@ -157,7 +175,9 @@ class DynaFile():
         return self._line_no
 
 class Expander():
-    "Variable expansion"
+    "Variable expansion, tokenizers, etc.;"
+    TOKEN_PATTERN = r"(\".*?\"|[\w\.\:=]+)"
+    TOKEN_REX = re.compile(TOKEN_PATTERN)
     def __init__(self, *dicts, **kwa):
         self._debug = kwa.get('debug', False)
         self._start = kwa.get('start', '{')
@@ -250,6 +270,9 @@ class Expander():
             return dict_[k]
         raise KeyError(f"No such key {k} in innermost scope")
 
+    # def is_expandable(self, token)
+    # properly qualify '}' comes after '{' for all '{'s?
+
     def outermost(self, k):
         dict_ = self._globals_first[0]
         if k in dict_:
@@ -270,8 +293,11 @@ class Expander():
     @staticmethod
     def tokenize(txt, **kwa):
         translation = kwa.get('translation', None)
-        pattern = kwa.get('pattern', r'\s+')
-        rex = re.compile(pattern)
+        pattern = kwa.get('pattern', Expander.TOKEN_PATTERN)
+        if pattern == Expander.TOKEN_PATTERN:
+            rex = Expander.TOKEN_REX
+        else:
+            rex = re.compile(pattern)
         tokens = rex.split(txt)
         if translation:
             translated_tokens = [ ]
