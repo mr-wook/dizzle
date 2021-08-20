@@ -290,7 +290,15 @@ class Expander():
         return tokens
 
     @staticmethod
+    def rex_shlex(txt):
+        PATTERN = r"""( |[\"\'].*[\"\'])"""
+        REX = re.compile(pattern)
+        rl = list(filter(None, [t.strip() for t in rex.split(txt)]))
+        return rl
+
+    @staticmethod
     def tokenize(txt, **kwa):
+        # splitter = Expander.rex_shlex
         splitter = shlex.split
         translation = kwa.get('translation', None)
         pattern = kwa.get('pattern', None)
