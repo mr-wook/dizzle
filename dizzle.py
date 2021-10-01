@@ -181,7 +181,6 @@ class Expander():
         self._debug = kwa.get('debug', False)
         self._start = kwa.get('start', '{')
         self._end = kwa.get('end', '}')
-        self.local_scope = self.innermost
         self.reset(*dicts)
 
     def __getitem__(self, k):
@@ -268,11 +267,20 @@ class Expander():
         try:
             v = self.mostest(k, self._locals_first)
         except KeyError as e:
-            raise KeyError(f"No such key {k} from innmost scopes outward")
+            raise KeyError(f"No such key {k} from innermost scopes outward")
         return v
 
     # def is_expandable(self, token)
     # properly qualify '}' comes after '{' for all '{'s?
+
+    def local_scope(self, k):
+        return self._locals_first[0][k]
+
+    def mostest(self, k, which):
+        for dict_ in which:
+            if k in dict_:
+                return dict_[k]
+        raise KeyError(f"No such k {k} in any scope")
 
     def outermost(self, k):
         try:
@@ -280,12 +288,6 @@ class Expander():
         except KeyError as e:
             raise KeyError(f"No such key {k} in from outermost scopes inward")
         return v
-
-    def mostest(self, k, which):
-        for dict_ in which:
-            if k in dict_:
-                return dict_[k]
-        raise KeyError(f"No such k {k} in any scope")
 
     def reset(self, *dicts):
         "reset -- use for scope change (ie: new locals at end of list);"
