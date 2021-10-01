@@ -264,19 +264,28 @@ class Expander():
         return format(v_data, v_fmt)
 
     def innermost(self, k):
-        dict_ = self._locals_first[0]
-        if k in dict_:
-            return dict_[k]
-        raise KeyError(f"No such key {k} in innermost scope")
+        ## dict_ = self._locals_first[0]
+        try:
+            v = self.mostest(k, self._locals_first)
+        except KeyError as e:
+            raise KeyError(f"No such key {k} from innmost scopes outward")
+        return v
 
     # def is_expandable(self, token)
     # properly qualify '}' comes after '{' for all '{'s?
 
     def outermost(self, k):
-        dict_ = self._globals_first[0]
-        if k in dict_:
-            return dict_[k]
-        raise KeyError(f"No such key {k} in outermost scope")
+        try:
+            v = self.mostest(k, self._globals_first)
+        except KeyError as e:
+            raise KeyError(f"No such key {k} in from outermost scopes inward")
+        return v
+
+    def mostest(self, k, which):
+        for dict_ in which:
+            if k in dict_:
+                return dict_[k]
+        raise KeyError(f"No such k {k} in any scope")
 
     def reset(self, *dicts):
         "reset -- use for scope change (ie: new locals at end of list);"
