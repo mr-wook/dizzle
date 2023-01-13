@@ -1,4 +1,4 @@
-#!/bin/env python3
+#!/bin/env python3.10
 
 """Tools to build DSLs (domain specific languages) with;"""
 
@@ -6,6 +6,8 @@ if True:
     import os
     import re
     import shlex
+    import sys
+    from   typing import Any, AnyStr, Dict, List, Match, NoReturn, Pattern
 
 
 class DynaFile():
@@ -15,6 +17,7 @@ class DynaFile():
         self._fn = fn
         self._mode = mode
         self._comment = kwa.get('comment', '#')
+        self._continuation = kwa.get('continuation', None)
         default_search_dirs = [ '.', '~', '/etc/dlvdsl' ]
         search_dirs = kwa.get('search_dirs', default_search_dirs)
         self._search_dirs = [os.path.expanduser(dirnm) for dirnm in search_dirs]
@@ -23,12 +26,7 @@ class DynaFile():
         # fd = self._open(fn, mode)
         ifd = open(fn, mode)
         if mode == 'r':
-            self._ibuf = [ln.strip() for ln in ifd.readlines()]
-            self._all_data = [ ]
-            self._line_no = 0
-            for i in range(len(self._ibuf)):
-                self._all_data.append(( i + 1, self._ibuf[i] ))
-            self._trimmed = self.trim(self._ibuf)
+            self._read_file(fn)
             return
         if mode in [ 'w', 'a' ]:
             self._obuf = [ ]
@@ -113,6 +111,34 @@ class DynaFile():
     def pop_trimmed(self, where = 0):
         self._trimmed.pop(where)
 
+    def _read_file(self, fn):
+        ifd = open(fn, 'r')
+        self._ibuf = [ln.strip() for ln in ifd.readlines()]
+        ifd.close()
+        self._all_data = [ ]
+        self._line_no = 0
+        nlines = len(self._ibuf)
+        i = 0
+        while i < nlines:
+            ln = self._ibuf[i]
+            if self._continuation:
+                if ln.endswith(self._continuation):
+                    done = False
+                    offset = 1
+                    while not done:
+                        if i + offset >= nlines:
+                            raise EOFError(f"Continuation symbol appears immediately before EOF in {fn}")
+                        ln = ln[:-len(self._continuation)] # Strip off the continuation character;
+                        ln = ln + self._ibuf[i + offset]
+                        offset += 1
+                        if not ln.endswith(self._continuation):
+                            done = True
+                            continue
+                    i = i + offset - 1
+            i += 1
+            self._all_data.append(( i, ln ))
+        self._trimmed = self.trim(self._ibuf)
+
     def save(self, fn = None):
         if not fn:
             fn = self._fn
@@ -124,6 +150,7 @@ class DynaFile():
         ofd.write(ostr + '\n')
 
     def trim(self, ibuf):
+        # Replace with dataflow generator approach (cf. mcoding:python generators)?
         trim = [ ]
         ibuf = filter(None, ibuf) # Remove blank lines;
         for ln in ibuf:
@@ -175,80 +202,364 @@ class DynaFile():
     def where(self):
         return self._line_no
 
-class Expander():
-    "Variable expansion, tokenizers, etc.;"
-    def __init__(self, *dicts, **kwa):
-        self._debug = kwa.get('debug', False)
-        self._start = kwa.get('start', '{')
-        self._end = kwa.get('end', '}')
-        self.reset(*dicts)
+
+class VarHelper():
+    def __init__(self, name: AnyStr, base_pattern: AnyStr, start: AnyStr = "{", end: AnyStr = "}") -> NoReturn:
+        self._name = name
+        self._groupdict = dict()
+        self._groups = [ ]
+        # self._dict = dict(matcher=None, matched=None, varname=None, value=None, full=None, core=None)
+        self._base = base_pattern
+        # print("base", base_pattern)
+        self._start_len, self._end_len = len(start), len(end)
+        self._start, self._end = start, end
+        core_pattern = self._core_pattern = rf'(?P<core>{base_pattern})'
+        # print("core", self._core_pattern)
+        self._core_rex = re.compile(self._core_pattern)
+        full_pattern = rf'(?P<full>{start}\s*{core_pattern}\s*{end})'
+        self._full_pattern = full_pattern
+        self._full_rex = re.compile(full_pattern)
+        # print("full", full_pattern)
+        self._core = self._full = None
+        return
+
+    def __contains__(self, k):
+        return k in self._groupdict
 
     def __getitem__(self, k):
+        if type(k) == type(0):
+            return self._groups[k]
+        if type(k) == type(""):
+            return self._groupdict[k]
+
+    def __str__(self):
+        return f"{self._name}: {str(self._full)}"
+
+    def findall(self, token: AnyStr) -> List:
+        """Uses the full pattern (includes delimiters) to find all matches in token;"""
+        matches = self._full_rex.findall(token) # findall returns a list of tuples of matches
+        self._matches = [ mtch for mtch in matches ] # Prune it to lists of [ full, core ], for easy replace operations;
+        return self._matches
+
+    def match(self, token: AnyStr) -> Match[str]:
+        """Uses the core pattern to extract ONLY the variable name"""
+        mtch = self._core_rex.match(token)
+        if mtch:
+            self._groupdict = mtch.groupdict()
+            self._groups = mtch.groups()
+        return mtch
+
+    @property
+    def base(self):
+        return self._base
+    
+    @property
+    def core(self):
+        return self._core
+
+    @property
+    def full(self):
+        return self._full
+
+    @property
+    def groupdict(self):
+        return self._groupdict
+        
+    @property
+    def groups(self):
+        return self._groups
+
+    @property
+    def matches(self):
+        return self._matches
+
+    @property
+    def name(self):
+        return self._name
+    
+
+
+class Expander():
+    "Variable expansion, tokenizers, etc.;"
+    # VARPAT     = r'\s*?(\~{0,1}[\w\.\:]+)\s*?'
+
+    def __init__(self, *dicts, **kwa):
+        self._debug = kwa.get('debug', False)
+        self._start = start = kwa.get('start', '{')
+        self._end   = end = kwa.get('end', '}')
+        self._namespaces = kwa.get('namespaces', None)
+        self._helpers = dict(FIELDED = VarHelper('FIELDED', r'\~{0,1}(\w+)\.(\w+)', start=start, end=end),
+                             DEEP = VarHelper('DEEP', r'\~{0,1}(\w+):(\w+)\.(\w+)', start=start, end=end),
+                             SIMPLE = VarHelper('SIMPLE', r'\~{0,1}(\w+)', start=start, end=end),
+                             NAMESPACED = VarHelper('NAMESPACED', r'\~{0,1}(\w+)\:(\w+)', start=start, end=end))
+        if not self._namespaces:
+            self.reset(*dicts)
+        return
+
+    def __getitem__(self, k):
+        "Normal-scoping (innermost to outermost) reference by key"
+        if self._namespaces:
+            return self._getitem_ns(k)
         for dict_ in self._locals_first:
             if k in dict_:
                 return dict_[k]
         raise KeyError(f"No such key {k} in any known scope")
 
     def __contains__(self, k):
+        "Using same logic as getitem, search for the presence of the requested key;"
+        if self._namespaces:
+            return self._contains_namespaced(self, k)
         for dict_ in self._locals_first:
             if k in dict_:
                 return True
         return False
 
     def __setitem__(self, k, v):
+        "Set innermost (locals) key with value;"
+        if self._namespaces:
+            self._setitem_ns(k, v)
+            return
         self.locals[k] = v
 
     # All the other expanding code goes here:
-    def __call__(self, expr, **kwa):
+    def __call__(self, expr, **kwa) -> str:
+        "Simple expander alias;"
         return self.expand(expr, **kwa)
-        ## raise NotImplementedError
 
-    def expand(self, text, **kwa):
-        tokens = self.simple_tokenize(text, **kwa)
-        expanded_tokens = self.expand_tokens(*tokens)
-        return expanded_tokens
+    def _setitem_ns(self, k, v):
+        where = "Expander._getitem_ns"
+        if ('.' not in k) and (':' not in k):
+            self._namespaces['default'][k] = v
+        syntax_type, ns, var, field = self._validate_ns(k, getting=False)
+        if syntax_type == 'simple':
+            self._namespaces[ns][var] = v
+        elif syntax_type in ['deep', 'fielded' ]:
+            self._namespaces[ns][var][field] = v
+        elif syntax_type == 'namespaced':
+            self._namespaces[ns][var] = v
+        else:
+            raise IndexError(f"{where}: {k} didn't match any known pattern {syntax_type}")
 
-    def expand_tokens(self, *tokens, **kwa):
-        expanded_tokens = [ ]
-        default = kwa.get('default', None)
-        for token in tokens:
-            # Replace with if (self._start in token) and (self._end in token)
-            #   when we support re.sub for multi-expands per token;
-            if token.startswith(self._start) and token.endswith(self._end):
-                varname = token[1:-1]
-                # Get number of tokens in value if prefixed by "~"
-                show_length = True if varname.startswith("~") else False
-                if show_length:
-                    varname = varname[1:]
-                v = self.get(varname, None)
-                if v != None:
-                    if show_length:
-                        if type(v) in [ type([]), type({}) ]:
-                            v = str(len(v))
-                        elif type(v) in [ type("") ]:
-                            v = str(len(Expander.tokenize(v)))
-                        else:
-                            self._error = f"Can't process value of type {type(v)}"
-                            return False
-                    expanded_tokens.append(v)
-                else:
-                    if default:
-                        expanded_tokens.append(default)
-                        continue
-                    ## bad_where, bad_ln = self._mf.trim_line_no, self._mf[self._mf.trim_line_no]
-                    self._error = f"Unset variable {varname}"
-                    return False
-            else:
-                expanded_tokens.append(token)
-        return expanded_tokens
+    def _getitem_ns(self, k):
+        where = "Expander._getitem_ns"
+        if ('.' not in k) and (':' not in k):
+            return self._namespaces['default'][k]
+        val_tup = self._validate_ns(k)
+        if val_tup[0] == False:
+            raise IndexError(f"{where}: {k} invalid")
+        value = val_tup[-1]
+        return value
 
-    def get(self, k, dflt = None):
+    def get(self, k, dflt = None) -> Any:
+        "Same as __getitem__, but accepts a default value;"
+        if self._namespaces:
+            return self._get_ns(k, dflt)
         for dict_ in self._locals_first:
             if k in dict_:
                 return dict_[k]
         return dflt
 
+    def _get_ns(self, k, dflt = ""):
+        "get with default, parses namespace syntax: name:var.field"
+        where = "Expander.get_ns"
+        val_tup = self._validate_ns(k)
+        if val_tup[0] == False:
+            return dflt
+        return val_tup[-1]
+
+    def _validate_ns(self, k, contains = False, getting=True):
+        "Make sure the namespaced var syntax is valid;"
+        def _contained(contains, exception, if_contained_value):
+            "Raise an exception if contains == False, or return if_contained_value if k cannot be dereferenced;"
+            if not contains:
+                raise exception
+            # do __contains__, indicated value for this state
+            return if_contained_value
+
+        where = "Expander._validate_ns"
+        default_ns = self._namespaces['default']
+        vhs = self._helpers             # Dict of VarHelpers
+        deep, namespaced, fielded, simple = vhs['DEEP'], vhs['NAMESPACED'], vhs['FIELDED'], vhs['SIMPLE']
+        falsy = ( False, False, False, False )
+        setting = (not getting) and (not contains)
+        getlen = k.startswith("~")
+        # Initial deep match for namespace:varname.field
+        if deep.match(k):
+            core, ns, var, field = deep.groups
+            if getting:
+                if ns not in self._namespaces:
+                    return _contained(contains, IndexError(f"{where}: Bad namespace {ns} in {k}"), False)
+                dict_  = self._namespaces[ns]
+                if var not in dict_:
+                    return _contained(contains, IndexError(f"{where}: No such var {var} in {k}"), False)
+                field_dict = dict_[var]
+                if type(field_dict) != type(dict()):
+                    return _contained(contains, IndexError(f"{where}: {k} does not have fields (dict)"), False)
+                if field not in field_dict:
+                    return _contained(contains, IndexError(f"{where}: {k} doesn't have a field {field}"), False)
+                value = str(len(field_dict[field])) if getlen else str(field_dict[field])
+                return 'deep', ns, var, field, value # Short circuit
+            if setting:
+                return 'deep', ns, var, field
+            # getting == False, contains == True
+            if ns not in self._namespaces:
+                return falsy
+            if var not in self._namespaces[ns]:
+                return falsy
+            if field not in self._namespaces[ns][var]:
+                return falsy
+            return deep, ns, var, field # final __contains__ state;
+
+        if namespaced.match(k): # Match namespace:varname
+            core, ns, var = namespaced.groups
+            if getting:
+                if ns not in self._namespaces:
+                    return _contained(contains, IndexError(f"{where}: {k} references a non-existing namespace {ns}"), False)
+                dict_ = self._namespaces[ns]
+                if var not in dict_:
+                    return _contained(contains, IndexError(f"{where}: {k} references a non-existing var {var}"), False)
+            if setting:
+                return 'namespaced', ns, var, None
+            # Not getting, Not setting, just contains;
+            if ns not in self._namespaces:
+                return falsy
+            dict_ = self._namespaces[ns]
+            if var not in dict_:
+                return falsy
+            value = str(len(dict_[var])) if getlen else str(dict_[var])
+            return 'namespaced', ns, var, value
+
+        if fielded.match(k): # Match x.y in default namespace;
+            ns = 'default'
+            var, field = fielded.groups
+            if getting:
+                if var not in default_ns:
+                    return _contained(contains, IndexError(f"{where}: {k} not in default namespace"))
+                if type(default[var]) != type({}):
+                    raise IndexError(f"{where}: {k} is not indexable to field")
+                return 'fielded', ns, var, str(default_ns[var][field])
+            if setting:
+                return 'fielded', ns, var, field
+            if var not in default_ns:
+                return falsy
+            if field not in default_ns[var]:
+                return falsy
+            value = str(len(default_ns[var][field])) if getlen else str(default_ns[var][field])
+            return 'fielded', ns, var, value
+
+        if simple.match(k):
+            var = simple.groups[0]
+            if getting:
+                if var not in default_ns:
+                    raise IndexError(f"{where}: {k} not in default namespace")
+                value = str(len(default_ns[var])) if getlen else str(default_ns[var])
+                return 'simple', 'default', k, value
+            if setting:
+                return 'simple', 'default', k, None
+            if var not in default_ns:
+                return _contained(contains, IndexError(f"{where}: {k} couldn't be parsed"), False)
+
+        raise IndexError(f"{where}: Couldn't parse {k} as a variable name")
+
+    def expand(self, text, **kwa):
+        tokens = Expander.tokenize_static(text)
+        olist = []
+        for token in tokens:
+            if not self.expandable(token):
+                olist.append(token)
+                continue
+            # print(f"Expandable '{token}'")
+            new_str = token
+            while self.expandable(new_str):
+                # print(f"expanding {new_str}")
+                new_str = self.expand_token(token) # was: xp.expand_tokens(token)[0]
+            olist.append(new_str)
+        # print(f"olist: {olist}")
+        ostr = " ".join(olist)
+        # tokens = self.simple_tokenize(text, **kwa)
+        # expanded_tokens = self.expand_tokens(*tokens)
+        return ostr
+
+    def expandable(self, token):
+        if self._start in token:
+            if self._end in token:
+                if token.index(self._start) < token.index(self._end):
+                    return True
+        return False
+
+    def _varlen(self, vn):
+        # This needs to de-reference vn to vr, right?
+        if type(vn) in [ type([]), type({}) ]:
+            return str(len(vn))
+        elif type(vn) in [ type("") ]:
+            return str(len(Expander.tokenize(vn)))
+        self._error = f"Can't process value of type {type(v)}"
+        return False
+
+    def _find_right_regex(self, token) -> VarHelper:
+        result = dict(found=0, all=[ ], which={ })
+        matchers = [ 'SIMPLE', 'NAMESPACED', 'FIELDED', 'DEEP' ] # Do not reorder;
+        for xpndr_nm in matchers:
+            vh = self._helpers[xpndr_nm] # This should be a VarHelper
+            # print(f"Expander._find_right_regex: {str(vh)} : {token}")
+            if not vh.match(token):
+                continue
+            if not vh.matches:
+                continue
+            # matcher = xpndr.helpers[xpndr_nm]
+            result['found'] += len(vh['matches'])
+            # found = xpndr.findall(token) # Now implement findall and replace? Or defer this to caller?
+            result['all'] += vh['all']
+            result['which'][xpndr.name] = vh['all']
+            # print("Expander._find_right_regex: matched")
+        # Now caller (expand_token) should do the suball against result;
+        return result
+
+    def expand_token(self, token, **kwa):
+        subtokens = self._find_subtokens(token)
+        if not subtokens:
+            return token
+        start, end = len(self._start), -len(self._end)
+        new_token = token
+        for full, core, *others in subtokens:
+            if core.startswith("~"):
+                v = str(len(self[core[1:]]))
+            else:
+                v = self.get(core, full) # Is this a good default (unexpanded) value?
+            new_token = new_token.replace(full, v)
+        return new_token
+
+    def expand_tokens(self, *tokens, **kwa):
+        expanded_tokens = [ ]
+        default = kwa.get('default', "")
+        for token in tokens:
+            # print(f"expand_tokens: {token}")
+            if not self.expandable(token):
+                expanded_tokens.append(token)
+                continue
+            v = self.expand_token(token) # Expander.VARREX.match(token) # Expandable -- this better work;
+            if v:
+                expanded_tokens.append(v)
+            else:
+                if default:
+                    expanded_tokens.append(default)
+                    expanded_tokens.append(token)
+                    continue
+                ## bad_where, bad_ln = self._mf.trim_line_no, self._mf[self._mf.trim_line_no]
+                self._error = f"Unset variable {varname}"
+        return expanded_tokens
+
+    def _find_subtokens(self, token: AnyStr) -> List:
+        found = set()
+        for helper in [ 'SIMPLE', 'NAMESPACED', 'FIELDED', 'DEEP' ]:
+            vh = self._helpers[helper]
+            helper_matches = vh.findall(token)
+            if helper_matches:
+                found = found.union(set(helper_matches))
+        return list(found)
+
     def format(self, k):
+        "Expansion Format support, ie: {foo:<format>}"
         v = self[k]
         if ':' not in v:
             return v
@@ -263,6 +574,7 @@ class Expander():
         return format(v_data, v_fmt)
 
     def innermost(self, k):
+        "Explicit search for key from innermost to outermost;"
         ## dict_ = self._locals_first[0]
         try:
             v = self.mostest(k, self._locals_first)
@@ -270,19 +582,19 @@ class Expander():
             raise KeyError(f"No such key {k} from innermost scopes outward")
         return v
 
-    # def is_expandable(self, token)
-    # properly qualify '}' comes after '{' for all '{'s?
-
     def local_scope(self, k):
+        "Explicitly only use local vars;"
         return self._locals_first[0][k]
 
     def mostest(self, k, which):
+        "Search based on a provided list of dicts, in order;"
         for dict_ in which:
             if k in dict_:
                 return dict_[k]
         raise KeyError(f"No such k {k} in any scope")
 
     def outermost(self, k):
+        "Search for key in outermost dict only;"
         try:
             v = self.mostest(k, self._globals_first)
         except KeyError as e:
@@ -297,18 +609,21 @@ class Expander():
         return self._globals_first
 
     def simple_tokenize(self, txt, **kwa):
+        "Use static tokenizer to break up a string;"
         tokens = Expander.tokenize(txt, **kwa)
         return tokens
 
     @staticmethod
     def rex_shlex(txt):
+        "Static lexer to break basic expressions into tokens;"
         PATTERN = r"""( |[\"\'].*[\"\'])"""
         REX = re.compile(pattern)
         rl = list(filter(None, [t.strip() for t in rex.split(txt)]))
         return rl
 
     @staticmethod
-    def tokenize(txt, **kwa):
+    def tokenize_static(txt, **kwa):
+        "The globally available tokenizer;"
         # splitter = Expander.rex_shlex
         splitter = shlex.split
         translation = kwa.get('translation', None)
@@ -326,6 +641,10 @@ class Expander():
             return tokens
         return translated_tokens
 
+    def tokenize(self, txt, **kwa):
+        "The instance-available tokenizer;"
+        return Expander.tokenize_static(txt, **kwa)  # For now...
+
     @property
     def error(self):
         return self._error
@@ -333,6 +652,10 @@ class Expander():
     @property
     def globals(self):
         return self._globals_first[0]
+
+    @property
+    def helpers(self):
+        return self._helpers
 
     @property
     def locals(self):
@@ -343,13 +666,15 @@ if __name__ == "__main__":
     import sys
 
     def cli_get_args():
-        args = sys.argv[:]
-        pname = args.pop(0)
+        pname, *args = sys.argv
         return args
 
+    def test_continuation(continuation_fn):
+        df = DynaFile(continuation_fn, continuation="\\", comment='//')
+        results = [ ln for ln in df.trim_iter() ]
+        return results
+
     def test_dynafile_include(include_fn):
-        args = cli_get_args()
-        include_fn = args.pop(0)
         df = DynaFile(include_fn)
         directives = [ ]
         for ln in df.trim_iter():
@@ -360,7 +685,7 @@ if __name__ == "__main__":
                 df.insert_trimmed(sub_df.trimmed)
             directives.append(ln)
         ostr = "\n".join(directives)
-        print(ostr)
+        # print(ostr)
         return directives
 
     def test_dereferencer():
@@ -368,12 +693,25 @@ if __name__ == "__main__":
         middles_ = dict(a="middle a", b="mid b", c="mid-c")
         locals_  = dict(a="a", b="b", c="c")
         xp = Expander(globals_, middles_, locals_)
-        print(f"default a: {xp['a']}")
-        print(f"innermost (most local) a: {xp.innermost('a')}")
-        print(f"outermost (most global) a: {xp.outermost('a')}")
-        print(f"default V: {xp['V']}")
-        print(f"formatted V: {xp.format('V')}")
+        assert xp['a'] == "a"
+        assert xp.innermost('a') == 'a'
+        assert xp.outermost('a') == 'GA'
+        assert xp['V'] == '4:04'
+        # print(f"formatted V: {xp.format('V')}") # prior to shift to var%fmt ?
 
+    def test_deref_ns():
+        env = dict(os.environ)
+        default = dict(a="def a", b="def b", c="def c")
+        aux = dict(a="aux a", b="aux b", c="aux c", v1=1)
+        fielded = dict(a=dict(thing_1 = "thing one", thing_2 = "thing_the_second"))
+        xp = Expander(namespaces=dict(env=env, default=default, aux=aux, fielded=fielded))
+        assert xp['env:USER'] == env['USER']
+        assert xp['a'] == "def a"
+        assert xp['aux:c'] == "aux c"
+        assert xp['fielded:a.thing_2'] == "thing_the_second"
+        assert xp['~fielded:a'] == "2"
+        xp['fielded:a.thing_3'] = "3rd_of_things"
+        assert xp['~fielded:a'] == "3"
 
     def test_expand_file(src_fn):
         # >>> xp = Expander(global_dict, local_dict)
@@ -385,7 +723,7 @@ if __name__ == "__main__":
         directives = test_dynafile_include(src_fn)
         # Now we have every legit directive, and can ignore (already processed) includes;
         for ln in directives:
-            tokens = Expander.tokenize(ln)
+            tokens = xp.tokenize(ln)
             cmd = tokens.pop(0).lower()
             if cmd == 'include':
                 continue
@@ -399,11 +737,54 @@ if __name__ == "__main__":
                 continue
             if cmd == 'echo':
                 olist = xp.expand_tokens(*tokens)
+                # print(" ".join(olist))
+                continue
+            print(f"Unknown command {cmd} in {ln}")
+            continue
+        return True
+
+    def test_expand_file_ns(src_fn):
+        # >>> xp = Expander(global_dict, local_dict)
+        #     s = xp("{foo}")
+        #     s = xp("{foo}.{bar}")
+        #     s = xp("{foo}.{frame:04d}.{ext}")
+        # globals_, locals_ = dict(), dict()
+        env, dflt = dict(os.environ), dict(first="1st", last="last", second="2nd", third="3rd")
+        xp = Expander(start='{{', end='}}', namespaces = dict(env = env, default = dflt))
+        directives = test_dynafile_include(src_fn)
+        # Now we have every legit directive, and can ignore (already processed) includes;
+        for ln in directives:
+            tokens = Expander.tokenize(ln)
+            cmd = tokens.pop(0).lower()
+            if cmd == 'include':
+                continue
+            if cmd == 'var':
+                k, v = tokens
+                xp[k] = v
+                continue
+            if cmd == 'echo':
+                olist = xp.expand_tokens(*tokens)
                 print(" ".join(olist))
                 continue
             print(f"Unknown command {cmd} in {ln}")
             continue
         return True
+
+    def test_expander():
+        fields = dict(x="Ecks", y="Why", z="Eh?", b="bee", c="see", third="3rd")
+        x = dict(a=fields, b="Befoo", c="Sifu")
+        env, dflt = dict(os.environ), dict(a="Ahey", b="bee", c="see", third="3rd")
+        xp = Expander(namespaces=dict(env=env, default=dflt, x=x), start="{{", end="}}")
+        s1 = "this is a string with {{x:a.z}}-{{b}}--{{~c}}: {{env:USER}}"
+        tstr = "this is a string with Eh?-bee--3:"
+        ostr = xp.expand(s1)
+        # print(ostr)
+        assert ostr.startswith(tstr)
+
+    def test_tokenizer():
+        s1 = "this is a string with {{x:a.z}}-{{b}}--{{c}}"
+        tokens = Expander.tokenize_static(s1)
+        assert len(tokens) == 6 # print(f"({len(tokens)}): {tokens}")
 
     def test_all(global_fn):
         # Test File Syntax:
@@ -411,14 +792,29 @@ if __name__ == "__main__":
         # local <varname> <stuff> -- add stuff to varname in local scope;
         # include <filename> -- scan an included file at this point;
         # echo <stuff> -- echo stuff with expansions using default notation;
+        test_expander()
         args = cli_get_args()
         include_fn = args.pop(0)
         print(f"test_dynafile_include({include_fn})")
         directives = test_dynafile_include(include_fn)
+        print("test_tokenizer()")
+        test_tokenizer()
         print("test_dereferencer()")
         test_dereferencer()
-        print(f"test_expand_file({include_fn})")
-        test_expand_file(include_fn)
+        print("test_deref_ns()")
+        test_deref_ns()
+        if 'ns' in include_fn:
+            print(f"test_expand_file_ns({include_fn})")
+            test_expand_file_ns(include_fn)
+        else:
+            print(f"test_expand_file({include_fn})")
+            test_expand_file(include_fn)
+        if not args:
+            sys.exit(0)
+        continuation_fn = args.pop(0)
+        results = test_continuation(continuation_fn)
+        print("test_continuation: \n".join(results))
+        sys.exit(0)
 
     # Main
     test_all(None)
