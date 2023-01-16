@@ -278,7 +278,6 @@ class VarHelper():
         return self._name
     
 
-
 class Expander():
     "Variable expansion, tokenizers, etc.;"
     # VARPAT     = r'\s*?(\~{0,1}[\w\.\:]+)\s*?'
@@ -288,6 +287,9 @@ class Expander():
         self._start = start = kwa.get('start', '{')
         self._end   = end = kwa.get('end', '}')
         self._namespaces = kwa.get('namespaces', None)
+        if self._namespaces:
+            if 'default' not in self._namespaces:
+                self._namespaces['default'] = { }
         self._helpers = dict(FIELDED = VarHelper('FIELDED', r'\~{0,1}(\w+)\.(\w+)', start=start, end=end),
                              DEEP = VarHelper('DEEP', r'\~{0,1}(\w+):(\w+)\.(\w+)', start=start, end=end),
                              SIMPLE = VarHelper('SIMPLE', r'\~{0,1}(\w+)', start=start, end=end),
@@ -327,13 +329,17 @@ class Expander():
         return self.expand(expr, **kwa)
 
     def _setitem_ns(self, k, v):
-        where = "Expander._getitem_ns"
+        where = "Expander._setitem_ns"
         if ('.' not in k) and (':' not in k):
             self._namespaces['default'][k] = v
         syntax_type, ns, var, field = self._validate_ns(k, getting=False)
         if syntax_type == 'simple':
             self._namespaces[ns][var] = v
-        elif syntax_type in ['deep', 'fielded' ]:
+        elif syntax_type in ['deep', 'fielded' ]: # ******** BREAKOUT DEEP vs FIELDED ********
+            if ns not in self._namespaces:
+                self._namespaces[ns] = dict()
+            if var not in self._namespaces[ns]:
+                self._namespaces[ns][var] = dict()
             self._namespaces[ns][var][field] = v
         elif syntax_type == 'namespaced':
             self._namespaces[ns][var] = v
@@ -431,7 +437,7 @@ class Expander():
 
         if fielded.match(k): # Match x.y in default namespace;
             ns = 'default'
-            var, field = fielded.groups
+            k, var, field = fielded.groups
             if getting:
                 if var not in default_ns:
                     return _contained(contains, IndexError(f"{where}: {k} not in default namespace"))
@@ -559,7 +565,7 @@ class Expander():
         return list(found)
 
     def format(self, k):
-        "Expansion Format support, ie: {foo:<format>}"
+        "Use f-string formmating against expanded string, not this..., please..."
         v = self[k]
         if ':' not in v:
             return v
@@ -697,7 +703,6 @@ if __name__ == "__main__":
         assert xp.innermost('a') == 'a'
         assert xp.outermost('a') == 'GA'
         assert xp['V'] == '4:04'
-        # print(f"formatted V: {xp.format('V')}") # prior to shift to var%fmt ?
 
     def test_deref_ns():
         env = dict(os.environ)
