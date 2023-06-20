@@ -17,8 +17,10 @@ xp['d'] = d
 print(f"{xp['fielded':a.b']}")
 print(f"User: {xp['env:USER']}")
 xp['z.meta'] = 'last'
+```
 
 ### scoped syntax
+```
 xp = Expander()   # Creates globals (outermost) and locals (innermost) by default and searches for matches from inner to outer
 ```
 
