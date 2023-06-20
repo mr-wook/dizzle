@@ -11,7 +11,8 @@ are provided using a well-known (default, and declared variants) syntax.
 
 ### namespaced syntax
 ```
-xp = Expander(namespaces=dict(default=dict(a=1, b=2, c=3, z=dict(name="z", value="26")), fielded=dict(a=dict(a=11, b=22, c=33)), env=os.environ))
+xp = Expander(namespaces=dict(default=dict(a=1, b=2, c=3, z=dict(name="z", value="26")),
+                              fielded=dict(a=dict(a=11, b=22, c=33)), env=os.environ))
 d = xp['c'] + 1
 xp['d'] = d
 print(f"{xp['fielded':a.b']}")
